@@ -27,3 +27,12 @@ dtoverlay=miniuart-bt
 
 # enable autoprobing of Bluetooth driver without need of hciattach/btattach
 dtoverlay=krnbt=on
+
+# Reduce boot delay
+boot_delay=0
+disable_splash=1
+
+# Settings for MPD/PCM5102
+enable_uart=1
+dtoverlay=i2s-mmap
+dtoverlay=hifiberry-dac
