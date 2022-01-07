@@ -1,0 +1,214 @@
+diff --git a/drivers/staging/fbtft/Kconfig b/drivers/staging/fbtft/Kconfig
+index dad1ddc..2eaff05 100644
+--- a/drivers/staging/fbtft/Kconfig
++++ b/drivers/staging/fbtft/Kconfig
+@@ -143,6 +143,12 @@ config FB_TFT_SSD1306
+ 	help
+ 	  Framebuffer support for SSD1306
+ 
++config FB_TFT_SSD1322
++	tristate "FB driver for the SSD1322 OLED Controller"
++	depends on FB_TFT
++	help
++	  Framebuffer support for SSD1322
++
+ config FB_TFT_SSD1331
+ 	tristate "FB driver for the SSD1331 LCD Controller"
+ 	depends on FB_TFT
+diff --git a/drivers/staging/fbtft/Makefile b/drivers/staging/fbtft/Makefile
+index e87193f..aa08046 100644
+--- a/drivers/staging/fbtft/Makefile
++++ b/drivers/staging/fbtft/Makefile
+@@ -26,6 +26,7 @@ obj-$(CONFIG_FB_TFT_SH1106)      += fb_sh1106.o
+ obj-$(CONFIG_FB_TFT_SSD1289)     += fb_ssd1289.o
+ obj-$(CONFIG_FB_TFT_SSD1305)     += fb_ssd1305.o
+ obj-$(CONFIG_FB_TFT_SSD1306)     += fb_ssd1306.o
++obj-$(CONFIG_FB_TFT_SSD1322)     += fb_ssd1322.o
+ obj-$(CONFIG_FB_TFT_SSD1305)     += fb_ssd1325.o
+ obj-$(CONFIG_FB_TFT_SSD1331)     += fb_ssd1331.o
+ obj-$(CONFIG_FB_TFT_SSD1351)     += fb_ssd1351.o
+diff --git a/drivers/staging/fbtft/fb_ssd1322.c b/drivers/staging/fbtft/fb_ssd1322.c
+new file mode 100644
+index 0000000..10594ba
+--- /dev/null
++++ b/drivers/staging/fbtft/fb_ssd1322.c
+@@ -0,0 +1,179 @@
++#include <linux/module.h>
++#include <linux/kernel.h>
++#include <linux/device.h>
++#include <linux/init.h>
++#include <linux/gpio.h>
++#include <linux/spi/spi.h>
++#include <linux/delay.h>
++
++#include "fbtft.h"
++
++#define DRVNAME     "fb_ssd1322"
++#define WIDTH       256
++#define HEIGHT      64
++#define GAMMA_NUM   1
++#define GAMMA_LEN   15
++#define DEFAULT_GAMMA "7 1 1 1 1 2 2 3 3 4 4 5 5 6 6"
++
++static int init_display(struct fbtft_par *par)
++{
++	par->fbtftops.reset(par);
++
++	gpiod_set_value(par->gpio.cs, 0);
++
++	write_reg(par, 0xFD, 0x12); 		/* SET_COMMAND_LOCK - Unlock*/
++	write_reg(par, 0xAE); 			/* SET_DISPLAY_OFF */
++	write_reg(par, 0xB3, 0x91);		/* SET_CLOCK_DIVIDER */
++	write_reg(par, 0xCA, 0x3F);		/* SET_MUX_RATIO - 64mux */
++	write_reg(par, 0xA2, 0x00);		/* SET_DISPLAY_OFFSET */
++	write_reg(par, 0xA1, 0x00);		/* SET_DISPLAY_START_LINE */
++	if (par->info->var.rotate == 180)	/* SET_REMAP_AND_DUAL_COM_LINE_MODE */
++		write_reg(par, 0xA0, 0x14, 0x11);
++	else
++		write_reg(par, 0xA0, 0x06, 0x11);
++	write_reg(par, 0xAB, 0x01);		/* FUNCTION_SELECTION - internal Vdd regulator */
++	write_reg(par, 0xB4, 0xA0, 0xFD);	/* ENABLE_VSL_EXTERN */
++	write_reg(par, 0xC1, 0x9F);		/* SET_CONTRAST_CURRENT */
++	write_reg(par, 0xC7, 0x0F);		/* MASTER_CURRENT_CONTROL */
++	write_reg(par, 0xB1, 0xE2);		/* SET_PHASE_LENGTH */
++	write_reg(par, 0xD1, 0x82, 0x20);	/* ENHANCE_DRIVING_SCHEME_CAPABILITY */
++	write_reg(par, 0xBB, 0x1F);		/* SET_PRECHARGE_VOLTAGE */
++	write_reg(par, 0xBE, 0x07);		/* SET_VCOMH */
++	write_reg(par, 0xA6);			/* NORMAL_DISPLAY */
++	write_reg(par, 0xAF);			/* SET_DISPLAY_ON */
++
++	return 0;
++}
++
++static void set_addr_win(struct fbtft_par *par, int xs, int ys, int xe, int ye)
++{
++	int width = par->info->var.xres;
++	int offset = (480 - width) / 8;
++
++	fbtft_par_dbg(DEBUG_SET_ADDR_WIN, par, "%s(xs=%d, ys=%d, xe=%d, ye=%d)\n", __func__, xs, ys, xe, ye);
++
++	write_reg(par, 0x15, offset, offset + (width / 4) - 1);
++	write_reg(par, 0x75, ys, ye);
++	write_reg(par, 0x5c);
++}
++
++/*
++	Grayscale Lookup Table
++	GS1 - GS15
++	The "Gamma curve" contains the relative values between the entries in the Lookup table.
++
++	0 = Setting of GS1 < Setting of GS2 < Setting of GS3..... < Setting of GS14 < Setting of GS15
++
++*/
++static int set_gamma(struct fbtft_par *par, u32 *curves)
++{
++	unsigned long tmp[GAMMA_LEN * GAMMA_NUM];
++	int i, acc = 0;
++
++	fbtft_par_dbg(DEBUG_INIT_DISPLAY, par, "%s()\n", __func__);
++
++	for (i = 0; i < GAMMA_LEN; i++) {
++		if (i > 0 && curves[i] < 1) {
++			dev_err(par->info->device,
++				"Illegal value in Grayscale Lookup Table at index %d. " \
++				"Must be greater than 0\n", i);
++			return -EINVAL;
++		}
++		acc += curves[i];
++		tmp[i] = acc;
++		if (acc > 180) {
++			dev_err(par->info->device,
++				"Illegal value(s) in Grayscale Lookup Table. " \
++				"At index=%d, the accumulated value has exceeded 180\n", i);
++			return -EINVAL;
++		}
++	}
++
++	write_reg(par, 0xB8,
++	tmp[0], tmp[1], tmp[2], tmp[3], tmp[4], tmp[5], tmp[6], tmp[7],
++	tmp[8], tmp[9], tmp[10], tmp[11], tmp[12], tmp[13], tmp[14]);
++
++	return 0;
++}
++
++static int blank(struct fbtft_par *par, bool on)
++{
++	fbtft_par_dbg(DEBUG_BLANK, par, "%s(blank=%s)\n", __func__, on ? "true" : "false");
++	if (on)
++		write_reg(par, 0xAE);
++	else
++		write_reg(par, 0xAF);
++	return 0;
++}
++
++
++#define CYR     613    /* 2.392 */
++#define CYG     601    /* 2.348 */
++#define CYB     233    /* 0.912 */
++
++static unsigned int rgb565_to_y(unsigned int rgb)
++{
++	rgb = cpu_to_le16(rgb);
++	return CYR * (rgb >> 11) + CYG * (rgb >> 5 & 0x3F) + CYB * (rgb & 0x1F);
++}
++
++static int write_vmem(struct fbtft_par *par, size_t offset, size_t len)
++{
++	u16 *vmem16 = (u16 *)(par->info->screen_base);
++	u8 *buf = par->txbuf.buf;
++	int y, x, bl_height, bl_width;
++	int ret = 0;
++
++	/* Set data line beforehand */
++	gpiod_set_value(par->gpio.dc, 1);
++
++	/* convert offset to word index from byte index */
++	offset /= 2;
++	bl_width = par->info->var.xres;
++	bl_height = len / par->info->fix.line_length;
++
++	fbtft_par_dbg(DEBUG_WRITE_VMEM, par,
++		"%s(offset=0x%x bl_width=%d bl_height=%d)\n", __func__, offset, bl_width, bl_height);
++
++	for (y = 0; y < bl_height; y++) {
++		for (x = 0; x < bl_width / 2; x++) {
++			*buf = cpu_to_le16(rgb565_to_y(vmem16[offset++])) >> 8 & 0xF0;
++			*buf++ |= cpu_to_le16(rgb565_to_y(vmem16[offset++])) >> 12;
++		}
++	}
++
++	/* Write data */
++	ret = par->fbtftops.write(par, par->txbuf.buf, bl_width/2*bl_height);
++	if (ret < 0)
++		dev_err(par->info->device, "%s: write failed and returned: %d\n", __func__, ret);
++
++	return ret;
++}
++
++static struct fbtft_display display = {
++	.regwidth = 8,
++	.width = WIDTH,
++	.height = HEIGHT,
++	.txbuflen = WIDTH * HEIGHT/2,
++	.gamma_num = GAMMA_NUM,
++	.gamma_len = GAMMA_LEN,
++	.gamma = DEFAULT_GAMMA,
++	.fbtftops = {
++		.write_vmem = write_vmem,
++		.init_display = init_display,
++		.set_addr_win  = set_addr_win,
++		.blank = blank,
++		.set_gamma = set_gamma,
++	},
++};
++
++FBTFT_REGISTER_DRIVER(DRVNAME, "solomon,ssd1322", &display);
++
++MODULE_ALIAS("spi:" DRVNAME);
++MODULE_ALIAS("platform:" DRVNAME);
++MODULE_ALIAS("spi:ssd1322");
++MODULE_ALIAS("platform:ssd1322");
++
++MODULE_DESCRIPTION("SSD1322 OLED Driver");
++MODULE_AUTHOR("WiseLord");
++MODULE_LICENSE("GPL");

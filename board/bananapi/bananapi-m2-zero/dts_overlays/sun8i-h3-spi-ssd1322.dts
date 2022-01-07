@@ -1,0 +1,39 @@
+/dts-v1/;
+/plugin/;
+
+/ {
+  compatible = "allwinner,sun8i-h3";
+
+  fragment@0 {
+    target = <&pio>;
+    __overlay__ {
+      ssd1322_pins: ssd1322_pins {
+        pins = "PC4", "PA2"; /*RESET, DC_RS*/
+        function = "gpio_out", "gpio_out" ;
+      };
+    };
+  };
+
+  fragment@1 {
+    target = <&spi0>;
+    __overlay__ {
+      status = "okay";
+      cs-gpios = <&pio 2 3 0>; /* PC3 */
+
+      ssd1322: ssd1322@0 {
+        compatible = "solomon,ssd1322";
+        reg = <0>;
+        pinctrl-names = "default";
+        pinctrl-0 = <&ssd1322_pins>;
+        spi-max-frequency = <16000000>;
+        rotate = <0>;
+        bgr = <0>;
+        fps = <25>;
+        buswidth = <8>;
+        reset-gpios = <&pio 2 4 1>; /*RESET=PC4*/
+        dc-gpios = <&pio 0 2 0>; /*DC_RS=PA2*/
+        debug = <0>;
+      };
+    };
+  };
+};
