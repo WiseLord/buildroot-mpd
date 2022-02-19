@@ -340,7 +340,7 @@ MPD_POST_INSTALL_TARGET_HOOKS += MPD_INSTALL_EXTRA_FILES
 
 define MPD_INSTALL_INIT_SYSV
 	$(INSTALL) -m 0755 -D package/mpd/S95mpd \
-		$(TARGET_DIR)/etc/init.d/S95mpd
+		$(TARGET_DIR)/etc/init.d/S35mpd
 endef
 
 $(eval $(meson-package))
