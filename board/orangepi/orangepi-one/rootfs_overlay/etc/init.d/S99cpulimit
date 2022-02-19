@@ -1,0 +1,31 @@
+#!/bin/sh
+
+FREQ_LIMIT=648000
+
+start() {
+	cd /sys/bus/cpu/devices/cpu0/cpufreq
+	cat cpuinfo_min_freq > scaling_min_freq
+	cat cpuinfo_min_freq > scaling_max_freq
+}
+
+stop() {
+	cd /sys/bus/cpu/devices/cpu0/cpufreq
+	cat cpuinfo_max_freq > scaling_min_freq
+	cat cpuinfo_max_freq > scaling_max_freq
+}
+
+case "$1" in
+	start)
+		start
+		;;
+	stop)
+		stop
+		;;
+	restart|reload)
+		stop
+		start
+		;;
+	*)
+		echo "Usage: $0 {start|stop|restart}"
+		exit 1
+esac
