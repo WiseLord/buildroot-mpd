@@ -1,0 +1,50 @@
+/dts-v1/;
+/plugin/;
+
+/ {
+	compatible = "allwinner,sun8i-h3";
+
+	fragment@0 {
+		target-path = "/";
+		__overlay__ {
+			pcm5102a: pcm5102a {
+				#sound-dai-cells = <0>;
+				compatible = "ti,pcm5102a";
+				status = "okay";
+			};
+
+			sound {
+				compatible = "simple-audio-card";
+				simple-audio-card,name = "i2s-pcm5102a-hifi";
+				simple-audio-card,format = "i2s";
+				simple-audio-card,mclk-fs = <512>;
+				simple-audio-card,cpu {
+					sound-dai = <&i2s0>;
+				};
+
+				simple-audio-card,codec {
+					sound-dai = <&pcm5102a>;
+				};
+			};
+		};
+	};
+
+	fragment@1 {
+		target = <&pio>;
+		__overlay__ {
+			i2s0_data_pins: i2s0 {
+				pins = "PA18", "PA19", "PA20";
+				function = "i2s0";
+			};
+		};
+	};
+
+	fragment@2 {
+		target = <&i2s0>;
+		__overlay__ {
+			pinctrl-names = "default";
+			pinctrl-0 = <&i2s0_data_pins>;
+			status = "okay";
+		};
+	};
+};

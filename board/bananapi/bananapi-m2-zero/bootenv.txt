@@ -1,0 +1,1 @@
+overlays=sun8i-h3-i2s-pcm5102
